@@ -208,6 +208,14 @@ function createMcpServer(): Server {
 
 const app = express();
 app.use(express.json());
+app.use((_req: Request, res: Response, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, mcp-session-id");
+  res.setHeader("Access-Control-Expose-Headers", "mcp-session-id");
+  if (_req.method === "OPTIONS") { res.sendStatus(204); return; }
+  next();
+});
 
 const sessions = new Map<string, { transport: StreamableHTTPServerTransport }>();
 
