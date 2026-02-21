@@ -1,45 +1,52 @@
-# ethskills MCP Server
+# Slither MCP Server
 
-An MCP (Model Context Protocol) server that exposes Ethereum development skills from [ethskills.com](https://ethskills.com) as tools for LLMs.
+An MCP (Model Context Protocol) server that provides static analysis capabilities for Solidity smart contracts using [Slither](https://github.com/crytic/slither).
 
 ## How it works
 
-On startup the server downloads all skill markdown files from ethskills.com and holds them in memory. Tool calls read directly from the cache — no network requests at query time.
+The server wraps Slither static analysis functionality, making it accessible through the Model Context Protocol. It can analyze Solidity projects (Foundry, Hardhat, etc.) and cache results for faster subsequent queries.
+
+## Features
+
+- **Caching**: Slither runs are cached to `{$PROJECT_PATH}/artifacts/project_facts.json` for faster subsequent loads
+- **Security Analysis**: Run Slither detectors and access results with filtering  
+- **Contract Analysis**: Get detailed information about contracts, functions, and inheritance
+- **Project Support**: Works with Foundry, Hardhat, and other Solidity project types
 
 ## Tools
 
 | Tool | Description |
 |------|-------------|
-| `list_skills` | Lists all available skills with their ids and descriptions |
-| `get_skill` | Returns the full markdown content for a given skill id |
+| `analyze_files` | Run Slither static analysis on specific Solidity files |
+| `run_detectors` | Run specific Slither detectors on file list |
+| `get_contract_info` | Get detailed information about contracts in files |
 
-## Skills
+## Requirements
 
-| ID | Name |
-|----|------|
-| `ship` | Ship |
-| `why` | Why Ethereum |
-| `gas` | Gas & Costs |
-| `wallets` | Wallets |
-| `l2s` | Layer 2s |
-| `standards` | Standards |
-| `tools` | Tools |
-| `building-blocks` | Money Legos |
-| `orchestration` | Orchestration |
-| `addresses` | Contract Addresses |
-| `concepts` | Concepts |
-| `security` | Security |
-| `testing` | Testing |
-| `indexing` | Indexing |
-| `frontend-ux` | Frontend UX |
-| `frontend-playbook` | Frontend Playbook |
-| `qa` | QA |
+### Local Development
+- Node.js 18+
+- Slither analyzer installed: `pip install slither-analyzer`
+- Solidity compiler (usually comes with Foundry or Hardhat)
+
+### Docker (Recommended)
+- Docker and Docker Compose
+- No additional setup required
+
+## Quick Start (Docker)
+
+```bash
+# Start the integrated security toolbox + MCP server
+docker compose up slither-mcp
+
+# Access interactive shell with all security tools
+docker compose exec slither-mcp bash
+```
 
 ## Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/health` | Health check — includes `skills_loaded` / `skills_total` counts |
+| `GET` | `/health` | Health check — includes cached analysis count |
 | `POST` | `/mcp` | MCP Streamable HTTP — initialize session or send request |
 | `GET` | `/mcp` | MCP SSE stream for an existing session |
 | `DELETE` | `/mcp` | Close an existing session |
@@ -51,10 +58,16 @@ npm install
 npm run dev
 ```
 
-## Production (Docker)
+## Docker Integration
 
-Built and deployed via `docker-compose` in [remix-api](../remix-api), available at `/ethskills` on the gateway.
+This server integrates with the [eth-security-toolbox](https://github.com/trailofbits/eth-security-toolbox) providing:
+- **Slither** - Static analysis
+- **Foundry** - Development framework  
+- **Echidna** - Property-based testing
+- **Medusa** - Advanced fuzzing
+- **Vyper** - Alternative compiler
+- **solc-select** - Version management
 
-```bash
-docker compose up ethskills --build
-```
+## Usage
+
+All tools accept `files` arrays containing Solidity file paths. Analysis runs in sandboxed environments with automatic cleanup. See [example-usage.md](example-usage.md) for detailed examples.

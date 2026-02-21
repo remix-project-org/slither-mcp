@@ -3,151 +3,153 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import express, { Request, Response } from "express";
 import { randomUUID } from "crypto";
+import { execSync } from "child_process";
+import { existsSync, mkdtempSync, rmSync, copyFileSync } from "fs";
+import { join, basename } from "path";
+import { tmpdir } from "os";
 
 const PORT = parseInt(process.env.PORT || "9005");
 const HOST = process.env.HOST || "0.0.0.0";
-const ETHSKILLS_BASE_URL = "https://ethskills.com";
 
-const SKILLS = [
-  {
-    id: "ship",
-    name: "Ship",
-    description: "End-to-end guide for AI agents — from a dApp idea to deployed production app",
-  },
-  {
-    id: "why",
-    name: "Why Ethereum",
-    description: "Covers upgrades, tradeoffs, and use case matching for Ethereum",
-  },
-  {
-    id: "gas",
-    name: "Gas & Costs",
-    description: "Current gas pricing and mainnet vs L2 cost comparison",
-  },
-  {
-    id: "wallets",
-    name: "Wallets",
-    description: "Wallet creation, connection, signing, multisig, and account abstraction",
-  },
-  {
-    id: "l2s",
-    name: "Layer 2s",
-    description: "L2 landscape, bridging, and deployment differences across L2 networks",
-  },
-  {
-    id: "standards",
-    name: "Standards",
-    description: "Token, identity, and payment standards including ERC-20, ERC-721, and more",
-  },
-  {
-    id: "tools",
-    name: "Tools",
-    description: "Frameworks, libraries, RPCs, and block explorers for Ethereum development",
-  },
-  {
-    id: "building-blocks",
-    name: "Money Legos",
-    description: "DeFi protocols and composability patterns",
-  },
-  {
-    id: "orchestration",
-    name: "Orchestration",
-    description: "Three-phase build system and dApp patterns",
-  },
-  {
-    id: "addresses",
-    name: "Contract Addresses",
-    description: "Verified contract addresses for major protocols across Ethereum mainnet and L2s",
-  },
-  {
-    id: "concepts",
-    name: "Concepts",
-    description: "Mental models for onchain building",
-  },
-  {
-    id: "security",
-    name: "Security",
-    description: "Solidity security patterns and vulnerability defense",
-  },
-  {
-    id: "testing",
-    name: "Testing",
-    description: "Foundry testing methodologies for smart contracts",
-  },
-  {
-    id: "indexing",
-    name: "Indexing",
-    description: "Reading and querying onchain data",
-  },
-  {
-    id: "frontend-ux",
-    name: "Frontend UX",
-    description: "Scaffold-ETH 2 rules and patterns for frontend development",
-  },
-  {
-    id: "frontend-playbook",
-    name: "Frontend Playbook",
-    description: "Complete build-to-production pipeline for dApp frontends",
-  },
-  {
-    id: "qa",
-    name: "QA",
-    description: "Production QA checklist for dApps",
-  },
-];
+interface SlitherResult {
+  success: boolean;
+  contracts?: any[];
+  detectors?: any[];
+  functions?: any[];
+  source?: string;
+  analysisOutput?: string;
+  error?: string;
+}
 
-const skillCache = new Map<string, string>();
+const analysisCache = new Map<string, any>();
 
-async function loadAllSkills(): Promise<void> {
-  console.log(`Downloading ${SKILLS.length} skills from ${ETHSKILLS_BASE_URL}...`);
+function createSandboxedEnvironment(files: string[]): string {
+  const sandboxDir = mkdtempSync(join(tmpdir(), "slither-sandbox-"));
+  
+  for (const file of files) {
+    if (!existsSync(file)) {
+      throw new Error(`File does not exist: ${file}`);
+    }
+    const filename = basename(file);
+    const destPath = join(sandboxDir, filename);
+    copyFileSync(file, destPath);
+  }
+  
+  return sandboxDir;
+}
 
-  await Promise.all(
-    SKILLS.map(async (skill) => {
-      const url = `${ETHSKILLS_BASE_URL}/${skill.id}/SKILL.md`;
+function runSlitherOnFiles(files: string[], args: string[] = []): SlitherResult {
+  let sandboxDir: string | null = null;
+  
+  try {
+    if (files.length === 0) {
+      return { success: false, error: "No files provided for analysis" };
+    }
+
+    const fileListKey = files.sort().join("|");
+    if (analysisCache.has(fileListKey)) {
+      console.log(`Using cached analysis for ${files.length} files`);
+      return { success: true, ...analysisCache.get(fileListKey) };
+    }
+
+    sandboxDir = createSandboxedEnvironment(files);
+    console.log(`Running Slither analysis on ${files.length} files in sandbox ${sandboxDir}...`);
+    
+    const slitherArgs = [".", "--print", "human-summary", ...args];
+    const result = execSync(`slither ${slitherArgs.join(" ")}`, { 
+      encoding: "utf8",
+      timeout: 30000,
+      cwd: sandboxDir
+    });
+
+    const analysis = {
+      contracts: [],
+      detectors: [],
+      functions: [],
+      analysisOutput: result,
+      analyzedFiles: files
+    };
+
+    analysisCache.set(fileListKey, analysis);
+    return { success: true, ...analysis };
+    
+  } catch (err) {
+    const error = err as Error;
+    return { 
+      success: false, 
+      error: `Slither analysis failed: ${error.message}` 
+    };
+  } finally {
+    if (sandboxDir && existsSync(sandboxDir)) {
       try {
-        const response = await fetch(url);
-        if (!response.ok) {
-          console.warn(`[${skill.id}] HTTP ${response.status} — skipped`);
-          return;
-        }
-        const content = await response.text();
-        skillCache.set(skill.id, content);
-        console.log(`[${skill.id}] loaded (${content.length} bytes)`);
-      } catch (err) {
-        console.warn(`[${skill.id}] fetch failed: ${(err as Error).message}`);
+        rmSync(sandboxDir, { recursive: true, force: true });
+      } catch (cleanupErr) {
+        console.warn(`Failed to cleanup sandbox: ${cleanupErr}`);
       }
-    })
-  );
-
-  console.log(`Skills ready: ${skillCache.size}/${SKILLS.length}`);
+    }
+  }
 }
 
 function createMcpServer(): Server {
   const server = new Server(
-    { name: "ethskills", version: "1.0.0" },
+    { name: "slither-mcp", version: "1.0.0" },
     { capabilities: { tools: {} } }
   );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: [
       {
-        name: "list_skills",
-        description: "List all available Ethereum development skills from ethskills.com",
-        inputSchema: { type: "object" as const, properties: {} },
-      },
-      {
-        name: "get_skill",
-        description: "Read the full content of a specific Ethereum development skill",
+        name: "analyze_files",
+        description: "Run Slither static analysis on specific Solidity files",
         inputSchema: {
           type: "object" as const,
           properties: {
-            skill_id: {
-              type: "string",
-              description:
-                "The skill identifier. Use list_skills to see all available ids (e.g. 'ship', 'wallets', 'security')",
+            files: {
+              type: "array",
+              items: { type: "string" },
+              description: "List of Solidity file paths to analyze",
             },
           },
-          required: ["skill_id"],
+          required: ["files"],
+        },
+      },
+      {
+        name: "run_detectors",
+        description: "Run specific Slither detectors on Solidity files",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            files: {
+              type: "array",
+              items: { type: "string" },
+              description: "List of Solidity file paths to analyze",
+            },
+            detectors: {
+              type: "array",
+              items: { type: "string" },
+              description: "List of specific detector names to run (optional, runs all if not specified)",
+            },
+          },
+          required: ["files"],
+        },
+      },
+      {
+        name: "get_contract_info",
+        description: "Get detailed information about contracts in Solidity files",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            files: {
+              type: "array",
+              items: { type: "string" },
+              description: "List of Solidity file paths to analyze",
+            },
+            contract_name: {
+              type: "string",
+              description: "Specific contract name (optional)",
+            },
+          },
+          required: ["files"],
         },
       },
     ],
@@ -156,44 +158,66 @@ function createMcpServer(): Server {
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
 
-    if (name === "list_skills") {
-      const skillList = SKILLS.map((s) => {
-        const note = skillCache.has(s.id) ? "" : " *(unavailable)*";
-        return `- **${s.name}** (id: \`${s.id}\`): ${s.description}${note}`;
-      }).join("\n");
+    if (name === "analyze_files") {
+      const { files } = args as { files: string[] };
+      const result = runSlitherOnFiles(files);
+      
+      if (!result.success) {
+        return {
+          content: [{ type: "text" as const, text: result.error || "Analysis failed" }],
+          isError: true,
+        };
+      }
 
       return {
         content: [
           {
             type: "text" as const,
-            text: `# Available Ethereum Development Skills\n\nUse \`get_skill\` with a skill id to read the full content.\n\n${skillList}`,
+            text: `# Slither Analysis Results\n\n**Files:** ${files.join(", ")}\n\n## Analysis Output:\n\`\`\`\n${result.analysisOutput || "Analysis completed successfully"}\n\`\`\``,
           },
         ],
       };
     }
 
-    if (name === "get_skill") {
-      const skill_id = (args as { skill_id: string }).skill_id;
-      const skill = SKILLS.find((s) => s.id === skill_id);
-
-      if (!skill) {
-        const validIds = SKILLS.map((s) => s.id).join(", ");
+    if (name === "run_detectors") {
+      const { files, detectors } = args as { files: string[]; detectors?: string[] };
+      const detectorArgs = detectors ? ["--detect", detectors.join(",")] : [];
+      const result = runSlitherOnFiles(files, detectorArgs);
+      
+      if (!result.success) {
         return {
-          content: [{ type: "text" as const, text: `Unknown skill id: '${skill_id}'. Valid ids are: ${validIds}` }],
-          isError: true,
-        };
-      }
-
-      const content = skillCache.get(skill_id);
-      if (!content) {
-        return {
-          content: [{ type: "text" as const, text: `Skill '${skill_id}' content is unavailable (failed to load at startup).` }],
+          content: [{ type: "text" as const, text: result.error || "Detector analysis failed" }],
           isError: true,
         };
       }
 
       return {
-        content: [{ type: "text" as const, text: content }],
+        content: [
+          {
+            type: "text" as const,
+            text: `# Slither Detector Results\n\n**Files:** ${files.join(", ")}\n\n## Findings:\n\`\`\`\n${result.analysisOutput || "No issues found"}\n\`\`\``,
+          },
+        ],
+      };
+    }
+
+    if (name === "get_contract_info") {
+      const { files, contract_name } = args as { files: string[]; contract_name?: string };
+      const result = runSlitherOnFiles(files, ["--print", "inheritance-graph"]);
+      
+      if (!result.success) {
+        return {
+          content: [{ type: "text" as const, text: result.error || "Contract analysis failed" }],
+          isError: true,
+        };
+      }
+
+      const info = contract_name 
+        ? `# Contract Information: ${contract_name}\n\n**Files:** ${files.join(", ")}\n\n## Analysis:\n\`\`\`\n${result.analysisOutput}\n\`\`\``
+        : `# Contract Analysis\n\n**Files:** ${files.join(", ")}\n\n## Analysis:\n\`\`\`\n${result.analysisOutput}\n\`\`\``;
+
+      return {
+        content: [{ type: "text" as const, text: info }],
       };
     }
 
@@ -222,9 +246,8 @@ const sessions = new Map<string, { transport: StreamableHTTPServerTransport }>()
 app.get("/health", (_req: Request, res: Response) => {
   res.json({
     status: "ok",
-    service: "ethskills-mcp",
-    skills_loaded: skillCache.size,
-    skills_total: SKILLS.length,
+    service: "slither-mcp",
+    cached_analyses: analysisCache.size,
   });
 });
 
@@ -276,10 +299,17 @@ app.delete("/mcp", async (req: Request, res: Response) => {
 });
 
 async function main(): Promise<void> {
-  await loadAllSkills();
+  try {
+    execSync("slither --version", { encoding: "utf8" });
+    console.log("Slither is available");
+  } catch (err) {
+    console.error("ERROR: Slither is not installed or not in PATH");
+    console.error("Please install Slither: pip install slither-analyzer");
+    process.exit(1);
+  }
 
   app.listen(PORT, HOST, () => {
-    console.log(`ethskills MCP server listening on ${HOST}:${PORT}`);
+    console.log(`Slither MCP server listening on ${HOST}:${PORT}`);
   });
 }
 

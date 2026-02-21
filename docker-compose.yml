@@ -1,0 +1,49 @@
+services:
+  # Main service: MCP server + full security toolbox
+  slither-mcp:
+    build: .
+    container_name: slither-mcp-toolbox
+    ports:
+      - "9005:9005"
+    volumes:
+      # Mount a directory for analyzing Solidity files
+      - ./contracts:/workspace/contracts:ro
+      # Mount a directory for analysis results  
+      - ./artifacts:/workspace/artifacts
+    environment:
+      - PORT=9005
+      - HOST=0.0.0.0
+    networks:
+      - slither-network
+    restart: unless-stopped
+    stdin_open: true
+    tty: true
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9005/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Interactive shell access (same image, no server)
+  toolbox-shell:
+    build: .
+    container_name: slither-toolbox-shell
+    volumes:
+      - ./contracts:/workspace/contracts
+      - ./artifacts:/workspace/artifacts
+    working_dir: /workspace
+    networks:
+      - slither-network
+    profiles:
+      - interactive
+    stdin_open: true
+    tty: true
+    command: ["/bin/bash"]
+    environment:
+      # Don't start MCP server
+      - PORT=
+
+networks:
+  slither-network:
+    driver: bridge
