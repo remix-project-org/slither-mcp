@@ -21,11 +21,12 @@
 ## Directory Structure
 
 ```
-├── contracts/          # Place your .sol files here
 ├── artifacts/          # Analysis results and cache
 ├── docker-compose.yml  # Docker services configuration
 └── src/               # MCP server source code
 ```
+
+**Note:** Files are now provided as content via the API rather than filesystem mounts.
 
 ## Usage Examples
 
@@ -35,7 +36,7 @@
 # Health check
 curl http://localhost:9005/health
 
-# Start MCP session and analyze files
+# Start MCP session and analyze files with content
 curl -X POST http://localhost:9005/mcp \
   -H "Content-Type: application/json" \
   -d '{
@@ -45,7 +46,10 @@ curl -X POST http://localhost:9005/mcp \
     "params": {
       "name": "analyze_files",
       "arguments": {
-        "files": ["/workspace/contracts/MyContract.sol"]
+        "files": {
+          "MyContract.sol": "pragma solidity ^0.8.0;\n\ncontract MyContract {\n    uint256 public value;\n    \n    function setValue(uint256 _value) public {\n        value = _value;\n    }\n}",
+          "Token.sol": "pragma solidity ^0.8.0;\n\nimport \"./MyContract.sol\";\n\ncontract Token is MyContract {\n    mapping(address => uint256) public balances;\n}"
+        }
       }
     }
   }'

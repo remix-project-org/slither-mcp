@@ -4,8 +4,8 @@ import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprot
 import express, { Request, Response } from "express";
 import { randomUUID } from "crypto";
 import { execSync } from "child_process";
-import { existsSync, mkdtempSync, rmSync, copyFileSync } from "fs";
-import { join, basename } from "path";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { join } from "path";
 import { tmpdir } from "os";
 
 const PORT = parseInt(process.env.PORT || "9005");
@@ -21,39 +21,51 @@ interface SlitherResult {
   error?: string;
 }
 
+interface FileContentMap {
+  [filePath: string]: string;
+}
+
 const analysisCache = new Map<string, any>();
 
-function createSandboxedEnvironment(files: string[]): string {
+function createSandboxedEnvironment(fileContentMap: FileContentMap): string {
   const sandboxDir = mkdtempSync(join(tmpdir(), "slither-sandbox-"));
   
-  for (const file of files) {
-    if (!existsSync(file)) {
-      throw new Error(`File does not exist: ${file}`);
-    }
-    const filename = basename(file);
-    const destPath = join(sandboxDir, filename);
-    copyFileSync(file, destPath);
+  for (const [filePath, content] of Object.entries(fileContentMap)) {
+    // Extract just the filename from the path for security
+    const filename = filePath.split('/').pop() || filePath;
+    // Ensure .sol extension
+    const safeFilename = filename.endsWith('.sol') ? filename : `${filename}.sol`;
+    const destPath = join(sandboxDir, safeFilename);
+    writeFileSync(destPath, content, 'utf8');
   }
   
   return sandboxDir;
 }
 
-function runSlitherOnFiles(files: string[], args: string[] = []): SlitherResult {
+function runSlitherOnFileContents(fileContentMap: FileContentMap, args: string[] = []): SlitherResult {
   let sandboxDir: string | null = null;
+
+  console.log(`Received request to analyze ${fileContentMap} files with Slither...`);
   
   try {
-    if (files.length === 0) {
+    const fileEntries = Object.entries(fileContentMap);
+    if (fileEntries.length === 0) {
       return { success: false, error: "No files provided for analysis" };
     }
 
-    const fileListKey = files.sort().join("|");
-    if (analysisCache.has(fileListKey)) {
-      console.log(`Using cached analysis for ${files.length} files`);
-      return { success: true, ...analysisCache.get(fileListKey) };
+    // Create cache key from file paths and content hashes
+    const cacheKey = fileEntries
+      .sort(([pathA], [pathB]) => pathA.localeCompare(pathB))
+      .map(([path, content]) => `${path}:${Buffer.from(content).toString('base64').slice(0, 16)}`)
+      .join('|');
+    
+    if (analysisCache.has(cacheKey)) {
+      console.log(`Using cached analysis for ${fileEntries.length} files`);
+      return { success: true, ...analysisCache.get(cacheKey) };
     }
 
-    sandboxDir = createSandboxedEnvironment(files);
-    console.log(`Running Slither analysis on ${files.length} files in sandbox ${sandboxDir}...`);
+    sandboxDir = createSandboxedEnvironment(fileContentMap);
+    console.log(`Running Slither analysis on ${fileEntries.length} files in sandbox ${sandboxDir}...`);
     
     const slitherArgs = [".", "--print", "human-summary", ...args];
     const result = execSync(`slither ${slitherArgs.join(" ")}`, { 
@@ -67,10 +79,10 @@ function runSlitherOnFiles(files: string[], args: string[] = []): SlitherResult 
       detectors: [],
       functions: [],
       analysisOutput: result,
-      analyzedFiles: files
+      analyzedFiles: Object.keys(fileContentMap)
     };
 
-    analysisCache.set(fileListKey, analysis);
+    analysisCache.set(cacheKey, analysis);
     return { success: true, ...analysis };
     
   } catch (err) {
@@ -99,30 +111,28 @@ function createMcpServer(): Server {
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: [
       {
-        name: "analyze_files",
-        description: "Run Slither static analysis on specific Solidity files",
+        name: "analyze_files_with_slither",
+        description: "Run Slither static analysis on Solidity files.",
         inputSchema: {
           type: "object" as const,
           properties: {
             files: {
-              type: "array",
-              items: { type: "string" },
-              description: "List of Solidity file paths to analyze",
+              type: "object",
+              description: "Map of file paths to their content (e.g., {'Contract.sol': 'contract MyContract {...}'})"
             },
           },
           required: ["files"],
         },
       },
       {
-        name: "run_detectors",
+        name: "run_detectors_with_slither",
         description: "Run specific Slither detectors on Solidity files",
         inputSchema: {
           type: "object" as const,
           properties: {
             files: {
-              type: "array",
-              items: { type: "string" },
-              description: "List of Solidity file paths to analyze",
+              type: "object",
+              description: "Map of file paths to their content"
             },
             detectors: {
               type: "array",
@@ -134,15 +144,14 @@ function createMcpServer(): Server {
         },
       },
       {
-        name: "get_contract_info",
+        name: "get_contract_info_with_slither",
         description: "Get detailed information about contracts in Solidity files",
         inputSchema: {
           type: "object" as const,
           properties: {
             files: {
-              type: "array",
-              items: { type: "string" },
-              description: "List of Solidity file paths to analyze",
+              type: "object",
+              description: "Map of file paths to their content"
             },
             contract_name: {
               type: "string",
@@ -159,8 +168,8 @@ function createMcpServer(): Server {
     const { name, arguments: args } = request.params;
 
     if (name === "analyze_files") {
-      const { files } = args as { files: string[] };
-      const result = runSlitherOnFiles(files);
+      const { files } = args as { files: FileContentMap };
+      const result = runSlitherOnFileContents(files);
       
       if (!result.success) {
         return {
@@ -169,20 +178,21 @@ function createMcpServer(): Server {
         };
       }
 
+      const fileNames = Object.keys(files);
       return {
         content: [
           {
             type: "text" as const,
-            text: `# Slither Analysis Results\n\n**Files:** ${files.join(", ")}\n\n## Analysis Output:\n\`\`\`\n${result.analysisOutput || "Analysis completed successfully"}\n\`\`\``,
+            text: `# Slither Analysis Results\n\n**Files:** ${fileNames.join(", ")}\n\n## Analysis Output:\n\`\`\`\n${result.analysisOutput || "Analysis completed successfully"}\n\`\`\``,
           },
         ],
       };
     }
 
     if (name === "run_detectors") {
-      const { files, detectors } = args as { files: string[]; detectors?: string[] };
+      const { files, detectors } = args as { files: FileContentMap; detectors?: string[] };
       const detectorArgs = detectors ? ["--detect", detectors.join(",")] : [];
-      const result = runSlitherOnFiles(files, detectorArgs);
+      const result = runSlitherOnFileContents(files, detectorArgs);
       
       if (!result.success) {
         return {
@@ -191,19 +201,20 @@ function createMcpServer(): Server {
         };
       }
 
+      const fileNames = Object.keys(files);
       return {
         content: [
           {
             type: "text" as const,
-            text: `# Slither Detector Results\n\n**Files:** ${files.join(", ")}\n\n## Findings:\n\`\`\`\n${result.analysisOutput || "No issues found"}\n\`\`\``,
+            text: `# Slither Detector Results\n\n**Files:** ${fileNames.join(", ")}\n\n## Findings:\n\`\`\`\n${result.analysisOutput || "No issues found"}\n\`\`\``,
           },
         ],
       };
     }
 
     if (name === "get_contract_info") {
-      const { files, contract_name } = args as { files: string[]; contract_name?: string };
-      const result = runSlitherOnFiles(files, ["--print", "inheritance-graph"]);
+      const { files, contract_name } = args as { files: FileContentMap; contract_name?: string };
+      const result = runSlitherOnFileContents(files, ["--print", "inheritance-graph"]);
       
       if (!result.success) {
         return {
@@ -212,9 +223,10 @@ function createMcpServer(): Server {
         };
       }
 
+      const fileNames = Object.keys(files);
       const info = contract_name 
-        ? `# Contract Information: ${contract_name}\n\n**Files:** ${files.join(", ")}\n\n## Analysis:\n\`\`\`\n${result.analysisOutput}\n\`\`\``
-        : `# Contract Analysis\n\n**Files:** ${files.join(", ")}\n\n## Analysis:\n\`\`\`\n${result.analysisOutput}\n\`\`\``;
+        ? `# Contract Information: ${contract_name}\n\n**Files:** ${fileNames.join(", ")}\n\n## Analysis:\n\`\`\`\n${result.analysisOutput}\n\`\`\``
+        : `# Contract Analysis\n\n**Files:** ${fileNames.join(", ")}\n\n## Analysis:\n\`\`\`\n${result.analysisOutput}\n\`\`\``;
 
       return {
         content: [{ type: "text" as const, text: info }],

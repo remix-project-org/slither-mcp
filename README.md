@@ -70,4 +70,4 @@ This server integrates with the [eth-security-toolbox](https://github.com/trailo
 
 ## Usage
 
-All tools accept `files` arrays containing Solidity file paths. Analysis runs in sandboxed environments with automatic cleanup. See [example-usage.md](example-usage.md) for detailed examples.
+All tools accept `files` objects containing file paths as keys and Solidity source code as values. Analysis runs in sandboxed environments with automatic cleanup. See [example-usage.md](example-usage.md) for detailed examples.
