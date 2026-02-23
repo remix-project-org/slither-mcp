@@ -112,27 +112,27 @@ function createMcpServer(): Server {
     tools: [
       {
         name: "analyze_files_with_slither",
-        description: "Run Slither static analysis on Solidity files.",
+        description: "Run Slither static analysis on Solidity files. Before calling this tool, you should use the tool get_compilation_result_by_file_path to get the actual compilation resut. Then the sources are available with `const sources = JSON.parse(compilationResult).source.sources`",
         inputSchema: {
           type: "object" as const,
           properties: {
-            files: {
+            sources: {
               type: "object",
-              description: "Map of file paths to their content (e.g., {'Contract.sol': 'contract MyContract {...}'}). This map for files is originating from the compilatiion result. `const files = compilationResult.sources`"
+              description: "Map of file paths to their content (e.g., {'Contract.sol': 'contract MyContract {...}'}). "
             },
           },
-          required: ["files"],
+          required: ["sources"],
         },
       },
       {
         name: "run_detectors_with_slither",
-        description: "Run specific Slither detectors on Solidity files",
+        description: "Run specific Slither detectors on Solidity files. Before calling this tool, you should use the tool get_compilation_result_by_file_path to get the actual compilation resut. Then the sources are available with `const sources = JSON.parse(compilationResult).source.sources`",
         inputSchema: {
           type: "object" as const,
           properties: {
-            files: {
+            sources: {
               type: "object",
-              description: "Map of file paths to their content (e.g., {'Contract.sol': 'contract MyContract {...}'}). This map for files is originating from the compilatiion result. `const files = compilationResult.sources`"
+              description:"Map of file paths to their content (e.g., {'Contract.sol': 'contract MyContract {...}'}).  "
             },
             detectors: {
               type: "array",
@@ -140,25 +140,25 @@ function createMcpServer(): Server {
               description: "List of specific detector names to run (optional, runs all if not specified)",
             },
           },
-          required: ["files"],
+          required: ["sources"],
         },
       },
       {
         name: "get_contract_info_with_slither",
-        description: "Get detailed information about contracts in Solidity files",
+        description: "Get detailed information about contracts in Solidity files. Before calling this tool, you should use the tool get_compilation_result_by_file_path to get the actual compilation resut. Then the sources are available with `const sourcesc = JSON.parse(compilationResult).source.sources`",
         inputSchema: {
           type: "object" as const,
           properties: {
-            files: {
+            sources: {
               type: "object",
-              description: "Map of file paths to their content (e.g., {'Contract.sol': 'contract MyContract {...}'}). This map for files is originating from the compilatiion result. `const files = compilationResult.sources`"
+              description: "Map of file paths to their content (e.g., {'Contract.sol': 'contract MyContract {...}'}). "
             },
             contract_name: {
               type: "string",
               description: "Specific contract name (optional)",
             },
           },
-          required: ["files"],
+          required: ["sources"],
         },
       },
     ],
@@ -168,8 +168,8 @@ function createMcpServer(): Server {
     const { name, arguments: args } = request.params;
 
     if (name === "analyze_files_with_slither") {
-      const { files } = args as { files: FileContentMap };
-      const result = runSlitherOnFileContents(files);
+      const { sources } = args as { sources: FileContentMap };
+      const result = runSlitherOnFileContents(sources);
       
       if (!result.success) {
         return {
@@ -178,7 +178,7 @@ function createMcpServer(): Server {
         };
       }
 
-      const fileNames = Object.keys(files);
+      const fileNames = Object.keys(sources);
       return {
         content: [
           {
@@ -190,9 +190,9 @@ function createMcpServer(): Server {
     }
 
     if (name === "run_detectors_with_slither") {
-      const { files, detectors } = args as { files: FileContentMap; detectors?: string[] };
+      const { sources, detectors } = args as { sources: FileContentMap; detectors?: string[] };
       const detectorArgs = detectors ? ["--detect", detectors.join(",")] : [];
-      const result = runSlitherOnFileContents(files, detectorArgs);
+      const result = runSlitherOnFileContents(sources, detectorArgs);
       
       if (!result.success) {
         return {
@@ -201,7 +201,7 @@ function createMcpServer(): Server {
         };
       }
 
-      const fileNames = Object.keys(files);
+      const fileNames = Object.keys(sources);
       return {
         content: [
           {
@@ -213,8 +213,8 @@ function createMcpServer(): Server {
     }
 
     if (name === "get_contract_info_with_slither") {
-      const { files, contract_name } = args as { files: FileContentMap; contract_name?: string };
-      const result = runSlitherOnFileContents(files, ["--print", "inheritance-graph"]);
+      const { sources, contract_name } = args as { sources: FileContentMap; contract_name?: string };
+      const result = runSlitherOnFileContents(sources, ["--print", "inheritance-graph"]);
       
       if (!result.success) {
         return {
@@ -223,7 +223,7 @@ function createMcpServer(): Server {
         };
       }
 
-      const fileNames = Object.keys(files);
+      const fileNames = Object.keys(sources);
       const info = contract_name 
         ? `# Contract Information: ${contract_name}\n\n**Files:** ${fileNames.join(", ")}\n\n## Analysis:\n\`\`\`\n${result.analysisOutput}\n\`\`\``
         : `# Contract Analysis\n\n**Files:** ${fileNames.join(", ")}\n\n## Analysis:\n\`\`\`\n${result.analysisOutput}\n\`\`\``;
