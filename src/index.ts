@@ -167,7 +167,7 @@ function createMcpServer(): Server {
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
 
-    if (name === "analyze_files") {
+    if (name === "analyze_files_with_slither") {
       const { files } = args as { files: FileContentMap };
       const result = runSlitherOnFileContents(files);
       
@@ -189,7 +189,7 @@ function createMcpServer(): Server {
       };
     }
 
-    if (name === "run_detectors") {
+    if (name === "run_detectors_with_slither") {
       const { files, detectors } = args as { files: FileContentMap; detectors?: string[] };
       const detectorArgs = detectors ? ["--detect", detectors.join(",")] : [];
       const result = runSlitherOnFileContents(files, detectorArgs);
@@ -212,7 +212,7 @@ function createMcpServer(): Server {
       };
     }
 
-    if (name === "get_contract_info") {
+    if (name === "get_contract_info_with_slither") {
       const { files, contract_name } = args as { files: FileContentMap; contract_name?: string };
       const result = runSlitherOnFileContents(files, ["--print", "inheritance-graph"]);
       
