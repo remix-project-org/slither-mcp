@@ -118,7 +118,7 @@ function createMcpServer(): Server {
           properties: {
             files: {
               type: "object",
-              description: "Map of file paths to their content (e.g., {'Contract.sol': 'contract MyContract {...}'})"
+              description: "Map of file paths to their content (e.g., {'Contract.sol': 'contract MyContract {...}'}). This map for files is originating from the compilatiion result. `const files = compilationResult.sources`"
             },
           },
           required: ["files"],
@@ -132,7 +132,7 @@ function createMcpServer(): Server {
           properties: {
             files: {
               type: "object",
-              description: "Map of file paths to their content"
+              description: "Map of file paths to their content (e.g., {'Contract.sol': 'contract MyContract {...}'}). This map for files is originating from the compilatiion result. `const files = compilationResult.sources`"
             },
             detectors: {
               type: "array",
@@ -151,7 +151,7 @@ function createMcpServer(): Server {
           properties: {
             files: {
               type: "object",
-              description: "Map of file paths to their content"
+              description: "Map of file paths to their content (e.g., {'Contract.sol': 'contract MyContract {...}'}). This map for files is originating from the compilatiion result. `const files = compilationResult.sources`"
             },
             contract_name: {
               type: "string",
@@ -243,7 +243,7 @@ function createMcpServer(): Server {
 }
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
 app.use((_req: Request, res: Response, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
