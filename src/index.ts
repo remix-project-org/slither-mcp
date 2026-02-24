@@ -4,8 +4,8 @@ import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprot
 import express, { Request, Response } from "express";
 import { randomUUID } from "crypto";
 import { execSync } from "child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "fs";
-import { join } from "path";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { join, dirname } from "path";
 import { tmpdir } from "os";
 
 const PORT = parseInt(process.env.PORT || "9005");
@@ -22,21 +22,50 @@ interface SlitherResult {
 }
 
 interface FileContentMap {
-  [filePath: string]: string;
+  [filePath: string]: {
+    content: string;
+  };
 }
 
 const analysisCache = new Map<string, any>();
 
+function createFileWithDirs(filePath: string, content: string): void {
+  const dir = dirname(filePath);
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
+  }
+  writeFileSync(filePath, content, 'utf8');
+}
+
 function createSandboxedEnvironment(fileContentMap: FileContentMap): string {
   const sandboxDir = mkdtempSync(join(tmpdir(), "slither-sandbox-"));
   
-  for (const [filePath, content] of Object.entries(fileContentMap)) {
+  // Initialize as a foundry project
+  try {
+    execSync("forge init --no-git --force .", { 
+      cwd: sandboxDir,
+      stdio: 'pipe'
+    });
+    // Remove default contracts
+    try {
+      rmSync(join(sandboxDir, 'src'), { recursive: true, force: true });
+      rmSync(join(sandboxDir, 'test'), { recursive: true, force: true });
+      rmSync(join(sandboxDir, 'script'), { recursive: true, force: true });
+      mkdirSync(join(sandboxDir, 'src'), { recursive: true });
+    } catch (cleanupErr) {
+      console.warn("Failed to clean up default foundry files:", cleanupErr);
+    }
+  } catch (err) {
+    console.warn("Failed to initialize foundry project:", err);
+  }
+  
+  for (const [filePath, value] of Object.entries(fileContentMap)) {
     // Extract just the filename from the path for security
-    const filename = filePath.split('/').pop() || filePath;
+    // const filename = filePath.split('/').pop() || filePath;
     // Ensure .sol extension
-    const safeFilename = filename.endsWith('.sol') ? filename : `${filename}.sol`;
-    const destPath = join(sandboxDir, safeFilename);
-    writeFileSync(destPath, content, 'utf8');
+    // const safeFilename = filePath.endsWith('.sol') ? filename : `${filename}.sol`;
+    const destPath = join(sandboxDir, 'src', filePath);
+    createFileWithDirs(destPath, value.content);
   }
   
   return sandboxDir;
@@ -45,7 +74,7 @@ function createSandboxedEnvironment(fileContentMap: FileContentMap): string {
 function runSlitherOnFileContents(fileContentMap: FileContentMap, args: string[] = []): SlitherResult {
   let sandboxDir: string | null = null;
 
-  console.log(`Received request to analyze ${fileContentMap} files with Slither...`);
+  console.log(`Received request to analyze ${Object.keys(fileContentMap).length} files with Slither...`);
   
   try {
     const fileEntries = Object.entries(fileContentMap);
@@ -56,7 +85,7 @@ function runSlitherOnFileContents(fileContentMap: FileContentMap, args: string[]
     // Create cache key from file paths and content hashes
     const cacheKey = fileEntries
       .sort(([pathA], [pathB]) => pathA.localeCompare(pathB))
-      .map(([path, content]) => `${path}:${Buffer.from(content).toString('base64').slice(0, 16)}`)
+      .map(([path, value]) => `${path}:${Buffer.from(value.content).toString('base64').slice(0, 16)}`)
       .join('|');
     
     if (analysisCache.has(cacheKey)) {
@@ -67,25 +96,44 @@ function runSlitherOnFileContents(fileContentMap: FileContentMap, args: string[]
     sandboxDir = createSandboxedEnvironment(fileContentMap);
     console.log(`Running Slither analysis on ${fileEntries.length} files in sandbox ${sandboxDir}...`);
     
-    const slitherArgs = [".", "--print", "human-summary", ...args];
-    const result = execSync(`slither ${slitherArgs.join(" ")}`, { 
-      encoding: "utf8",
-      timeout: 30000,
-      cwd: sandboxDir
-    });
+    const slitherArgs = ["src", ...args];
+    const cmd = `slither ${slitherArgs.join(" ")}`
+    console.log(`Executing command: ${cmd} in directory: ${sandboxDir}`);
+    
+    let stdout = '';
+    let stderr = '';
+    let combinedOutput = '';
+    
+    try {
+      const result = execSync(cmd, { 
+        encoding: "utf8",
+        timeout: 30000,
+        cwd: sandboxDir
+      });
+      stdout = result;
+      combinedOutput = result;
+    } catch (err: any) {
+      // Slither may exit with non-zero code even on successful analysis
+      stdout = err.stdout || '';
+      stderr = err.stderr || '';
+      combinedOutput = (stdout + stderr).trim();
+      
+      console.log(`Command failed with code ${err.status}, but may have output:`);
+      console.log(`Error message: ${err.message}`);
+    }
 
     const analysis = {
       contracts: [],
       detectors: [],
       functions: [],
-      analysisOutput: result,
-      analyzedFiles: Object.keys(fileContentMap)
+      analysisOutput: combinedOutput || "No output from Slither"
     };
 
     analysisCache.set(cacheKey, analysis);
     return { success: true, ...analysis };
     
   } catch (err) {
+    console.error("Error during Slither analysis:", err);
     const error = err as Error;
     return { 
       success: false, 
@@ -112,7 +160,7 @@ function createMcpServer(): Server {
     tools: [
       {
         name: "analyze_files_with_slither",
-        description: "Run Slither static analysis on Solidity files. Before calling this tool, you should use the tool get_compilation_result_by_file_path to get the actual compilation resut. Then the sources are available with `const sources = JSON.parse(compilationResult).source.sources`",
+        description: "Run Slither static analysis on Solidity files. Before calling this tool, you should use the tool get_compilation_result_sources_by_file_path to get the actual compilation resut. Then the sources are available with `const sources = JSON.parse(compilationResultSources.content[0].text)`",
         inputSchema: {
           type: "object" as const,
           properties: {
@@ -126,7 +174,7 @@ function createMcpServer(): Server {
       },
       {
         name: "run_detectors_with_slither",
-        description: "Run specific Slither detectors on Solidity files. Before calling this tool, you should use the tool get_compilation_result_by_file_path to get the actual compilation resut. Then the sources are available with `const sources = JSON.parse(compilationResult).source.sources`",
+        description: "Run specific Slither detectors on Solidity files. Before calling this tool, you should use the tool get_compilation_result_sources_by_file_path to get the actual compilation resut. Then the sources are available with `const sources = JSON.parse(compilationResultSources.content[0].text)`",
         inputSchema: {
           type: "object" as const,
           properties: {
@@ -145,7 +193,7 @@ function createMcpServer(): Server {
       },
       {
         name: "get_contract_info_with_slither",
-        description: "Get detailed information about contracts in Solidity files. Before calling this tool, you should use the tool get_compilation_result_by_file_path to get the actual compilation resut. Then the sources are available with `const sourcesc = JSON.parse(compilationResult).source.sources`",
+        description: "Get detailed information about contracts in Solidity files. Before calling this tool, you should use the tool get_compilation_result_sources_by_file_path to get the actual compilation resut. Then the sources are available with `const sourcesc = JSON.parse(compilationResultSources.content[0].text)`",
         inputSchema: {
           type: "object" as const,
           properties: {
@@ -179,14 +227,16 @@ function createMcpServer(): Server {
       }
 
       const fileNames = Object.keys(sources);
-      return {
+      const res = {
         content: [
           {
             type: "text" as const,
-            text: `# Slither Analysis Results\n\n**Files:** ${fileNames.join(", ")}\n\n## Analysis Output:\n\`\`\`\n${result.analysisOutput || "Analysis completed successfully"}\n\`\`\``,
+            text: `# Slither Analysis o Results\n\n## Analysis Output:\n\`\`\`\n${result.analysisOutput || "Analysis completed successfully"}\n\`\`\``,
           },
         ],
       };
+      console.log(`Analysis completed for ${fileNames.length} files`, JSON.stringify(res, null, 2));
+      return res
     }
 
     if (name === "run_detectors_with_slither") {
@@ -206,7 +256,7 @@ function createMcpServer(): Server {
         content: [
           {
             type: "text" as const,
-            text: `# Slither Detector Results\n\n**Files:** ${fileNames.join(", ")}\n\n## Findings:\n\`\`\`\n${result.analysisOutput || "No issues found"}\n\`\`\``,
+            text: `# Slither Detector Results\n\n## Findings:\n\`\`\`\n${result.analysisOutput || "No issues found"}\n\`\`\``,
           },
         ],
       };
@@ -225,8 +275,8 @@ function createMcpServer(): Server {
 
       const fileNames = Object.keys(sources);
       const info = contract_name 
-        ? `# Contract Information: ${contract_name}\n\n**Files:** ${fileNames.join(", ")}\n\n## Analysis:\n\`\`\`\n${result.analysisOutput}\n\`\`\``
-        : `# Contract Analysis\n\n**Files:** ${fileNames.join(", ")}\n\n## Analysis:\n\`\`\`\n${result.analysisOutput}\n\`\`\``;
+        ? `# Contract Information: ${contract_name}\n\n## Analysis:\n\`\`\`\n${result.analysisOutput}\n\`\`\``
+        : `# Contract Analysis\n\n## Analysis:\n\`\`\`\n${result.analysisOutput}\n\`\`\``;
 
       return {
         content: [{ type: "text" as const, text: info }],
@@ -307,6 +357,39 @@ app.delete("/mcp", async (req: Request, res: Response) => {
     sessions.delete(sessionId);
   } else {
     res.status(404).json({ error: "Session not found" });
+  }
+});
+
+app.post("/analyze", async (req: Request, res: Response) => {
+  try {
+    const { sources } = req.body as { sources: FileContentMap };
+    
+    if (!sources || typeof sources !== 'object') {
+      res.status(400).json({ error: "Missing or invalid 'sources' parameter" });
+      return;
+    }
+
+    const result = runSlitherOnFileContents(sources);
+    
+    if (!result.success) {
+      res.status(500).json({ 
+        error: "Analysis failed", 
+        details: result.error 
+      });
+      return;
+    }
+
+    res.json({
+      success: true,
+      analysis: result.analysisOutput,
+      fileCount: Object.keys(sources).length
+    });
+  } catch (err) {
+    console.error("Error in /analyze endpoint:", err);
+    res.status(500).json({ 
+      error: "Internal server error", 
+      details: err instanceof Error ? err.message : "Unknown error" 
+    });
   }
 });
 
