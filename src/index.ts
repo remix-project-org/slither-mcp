@@ -37,7 +37,22 @@ function createFileWithDirs(filePath: string, content: string): void {
   writeFileSync(filePath, content, 'utf8');
 }
 
-function createSandboxedEnvironment(fileContentMap: FileContentMap): string {
+function setFoundrySolcVersion(version) {
+  try {
+    version = version.match(/\d+\.\d+\.\d+/)[0];
+  } catch (e) {
+    console.error(e)
+  }
+  
+  const toml = fs.readFileSync('foundry.toml', 'utf8');
+  const updated = toml.replace(
+    '[profile.default]',
+    `[profile.default]\nsolc_version = "${version}"`
+  );
+  fs.writeFileSync('foundry.toml', updated, 'utf8');
+}
+
+function createSandboxedEnvironment(fileContentMap: FileContentMap, version: string): string {
   const sandboxDir = mkdtempSync(join(tmpdir(), "slither-sandbox-"));
   
   // Initialize as a foundry project
@@ -46,6 +61,7 @@ function createSandboxedEnvironment(fileContentMap: FileContentMap): string {
       cwd: sandboxDir,
       stdio: 'pipe'
     });
+    setFoundrySolcVersion(version)
     // Remove default contracts
     try {
       rmSync(join(sandboxDir, 'src'), { recursive: true, force: true });
@@ -71,7 +87,7 @@ function createSandboxedEnvironment(fileContentMap: FileContentMap): string {
   return sandboxDir;
 }
 
-function runSlitherOnFileContents(fileContentMap: FileContentMap, args: string[] = []): SlitherResult {
+function runSlitherOnFileContents(fileContentMap: FileContentMap, args: string[] = []), version: string = null: SlitherResult {
   let sandboxDir: string | null = null;
 
   console.log(`Received request to analyze ${Object.keys(fileContentMap).length} files with Slither...`);
@@ -93,7 +109,7 @@ function runSlitherOnFileContents(fileContentMap: FileContentMap, args: string[]
       return { success: true, ...analysisCache.get(cacheKey) };
     }
 
-    sandboxDir = createSandboxedEnvironment(fileContentMap);
+    sandboxDir = createSandboxedEnvironment(fileContentMap, version);
     console.log(`Running Slither analysis on ${fileEntries.length} files in sandbox ${sandboxDir}...`);
     
     const slitherArgs = ["src", ...args];
@@ -362,14 +378,14 @@ app.delete("/mcp", async (req: Request, res: Response) => {
 
 app.post("/analyze", async (req: Request, res: Response) => {
   try {
-    const { sources } = req.body as { sources: FileContentMap };
+    const { sources, version } = req.body as { sources: FileContentMap, version: string };
     
     if (!sources || typeof sources !== 'object') {
       res.status(400).json({ error: "Missing or invalid 'sources' parameter" });
       return;
     }
 
-    const result = runSlitherOnFileContents(sources);
+    const result = runSlitherOnFileContents(sources, null, version);
     
     if (!result.success) {
       res.status(500).json({ 
