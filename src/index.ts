@@ -5,6 +5,7 @@ import express, { Request, Response } from "express";
 import { randomUUID } from "crypto";
 import { execSync } from "child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import * as fs from "fs";
 import { join, dirname } from "path";
 import { tmpdir } from "os";
 
@@ -37,9 +38,11 @@ function createFileWithDirs(filePath: string, content: string): void {
   writeFileSync(filePath, content, 'utf8');
 }
 
-function setFoundrySolcVersion(version) {
+function setFoundrySolcVersion(version: string | null) {
+  if (!version) return
   try {
-    version = version.match(/\d+\.\d+\.\d+/)[0];
+    const match = version.match(/\d+\.\d+\.\d+/);
+    version = match ? match[0] : version;
   } catch (e) {
     console.error(e)
   }
@@ -52,7 +55,7 @@ function setFoundrySolcVersion(version) {
   fs.writeFileSync('foundry.toml', updated, 'utf8');
 }
 
-function createSandboxedEnvironment(fileContentMap: FileContentMap, version: string): string {
+function createSandboxedEnvironment(fileContentMap: FileContentMap, version: string | null): string {
   const sandboxDir = mkdtempSync(join(tmpdir(), "slither-sandbox-"));
   
   // Initialize as a foundry project
@@ -61,7 +64,7 @@ function createSandboxedEnvironment(fileContentMap: FileContentMap, version: str
       cwd: sandboxDir,
       stdio: 'pipe'
     });
-    setFoundrySolcVersion(version)
+    if (version) setFoundrySolcVersion(version)
     // Remove default contracts
     try {
       rmSync(join(sandboxDir, 'src'), { recursive: true, force: true });
@@ -87,7 +90,7 @@ function createSandboxedEnvironment(fileContentMap: FileContentMap, version: str
   return sandboxDir;
 }
 
-function runSlitherOnFileContents(fileContentMap: FileContentMap, args: string[] = []), version: string = null: SlitherResult {
+function runSlitherOnFileContents(fileContentMap: FileContentMap, args: string[] = [], version: string | null = null): SlitherResult {
   let sandboxDir: string | null = null;
 
   console.log(`Received request to analyze ${Object.keys(fileContentMap).length} files with Slither...`);
@@ -385,7 +388,7 @@ app.post("/analyze", async (req: Request, res: Response) => {
       return;
     }
 
-    const result = runSlitherOnFileContents(sources, null, version);
+    const result = runSlitherOnFileContents(sources, [], version);
     
     if (!result.success) {
       res.status(500).json({ 
