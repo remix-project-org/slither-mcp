@@ -4,8 +4,7 @@ import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprot
 import express, { Request, Response } from "express";
 import { randomUUID } from "crypto";
 import { execSync } from "child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
-import * as fs from "fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from "fs";
 import { join, dirname } from "path";
 import { tmpdir } from "os";
 
@@ -38,7 +37,7 @@ function createFileWithDirs(filePath: string, content: string): void {
   writeFileSync(filePath, content, 'utf8');
 }
 
-function setFoundrySolcVersion(version: string | null) {
+function setFoundrySolcVersion(version: string | null, sandboxDir: string) {
   if (!version) return
   try {
     const match = version.match(/\d+\.\d+\.\d+/);
@@ -46,13 +45,13 @@ function setFoundrySolcVersion(version: string | null) {
   } catch (e) {
     console.error(e)
   }
-  
-  const toml = fs.readFileSync('foundry.toml', 'utf8');
+  const path = join(sandboxDir, 'foundry.toml');
+  const toml = readFileSync(path, 'utf8');
   const updated = toml.replace(
     '[profile.default]',
     `[profile.default]\nsolc_version = "${version}"`
   );
-  fs.writeFileSync('foundry.toml', updated, 'utf8');
+  writeFileSync(path, updated, 'utf8');
 }
 
 function createSandboxedEnvironment(fileContentMap: FileContentMap, version: string | null): string {
@@ -64,7 +63,7 @@ function createSandboxedEnvironment(fileContentMap: FileContentMap, version: str
       cwd: sandboxDir,
       stdio: 'pipe'
     });
-    if (version) setFoundrySolcVersion(version)
+    if (version) setFoundrySolcVersion(version, sandboxDir)
     // Remove default contracts
     try {
       rmSync(join(sandboxDir, 'src'), { recursive: true, force: true });
