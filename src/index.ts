@@ -87,16 +87,30 @@ function createSandboxedEnvironment(fileContentMap: FileContentMap, version: str
 
   for (const [filePath, value] of Object.entries(fileContentMap)) {
     // Determine if this is a dependency file or a source file
-    // Dependency files (like @openzeppelin) should be placed at root level to match remappings
-    // User contract files should be placed in src/
-    const isDependency = filePath.startsWith('@') || filePath.startsWith('node_modules/') || filePath.includes('/node_modules/');
+    // Check if the file path matches any remapping prefix
+    let isDependency = false;
+    if (remappings && remappings.length > 0) {
+      for (const remapping of remappings) {
+        // Remappings are in format "prefix=path" or just "prefix/"
+        const prefix = remapping.split('=')[0].replace(/\/$/, '');
+        if (filePath.startsWith(prefix)) {
+          isDependency = true;
+          break;
+        }
+      }
+    }
+
+    // Fallback: also check for common patterns if not matched by remappings
+    if (!isDependency) {
+      isDependency = filePath.startsWith('@') || filePath.startsWith('node_modules/') || filePath.includes('/node_modules/');
+    }
 
     const destPath = isDependency
       ? join(sandboxDir, filePath)  // Place dependencies at root level
       : join(sandboxDir, 'src', filePath);  // Place user contracts in src/
 
     createFileWithDirs(destPath, value.content);
-    console.log(`Placed file at: ${destPath}`);
+    console.log(`Placed file at: ${destPath} (dependency: ${isDependency})`);
   }
 
   return sandboxDir;
