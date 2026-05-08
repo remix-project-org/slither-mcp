@@ -54,12 +54,12 @@ function setFoundrySolcVersion(version: string | null, sandboxDir: string) {
   writeFileSync(path, updated, 'utf8');
 }
 
-function createSandboxedEnvironment(fileContentMap: FileContentMap, version: string | null): string {
+function createSandboxedEnvironment(fileContentMap: FileContentMap, version: string | null, remappings?: string[]): string {
   const sandboxDir = mkdtempSync(join(tmpdir(), "slither-sandbox-"));
-  
+
   // Initialize as a foundry project
   try {
-    execSync("forge init --no-git --force .", { 
+    execSync("forge init --no-git --force .", {
       cwd: sandboxDir,
       stdio: 'pipe'
     });
@@ -76,42 +76,56 @@ function createSandboxedEnvironment(fileContentMap: FileContentMap, version: str
   } catch (err) {
     console.warn("Failed to initialize foundry project:", err);
   }
-  
-  for (const [filePath, value] of Object.entries(fileContentMap)) {
-    // Extract just the filename from the path for security
-    // const filename = filePath.split('/').pop() || filePath;
-    // Ensure .sol extension
-    // const safeFilename = filePath.endsWith('.sol') ? filename : `${filename}.sol`;
-    const destPath = join(sandboxDir, 'src', filePath);
-    createFileWithDirs(destPath, value.content);
+
+  // Create remappings.txt at the project root if remappings are provided
+  if (remappings && remappings.length > 0) {
+    const remappingsPath = join(sandboxDir, 'remappings.txt');
+    const remappingsContent = remappings.join('\n');
+    writeFileSync(remappingsPath, remappingsContent, 'utf8');
+    console.log(`Created remappings.txt at ${remappingsPath} with ${remappings.length} remapping(s)`);
   }
-  
+
+  for (const [filePath, value] of Object.entries(fileContentMap)) {
+    // Determine if this is a dependency file or a source file
+    // Dependency files (like @openzeppelin) should be placed at root level to match remappings
+    // User contract files should be placed in src/
+    const isDependency = filePath.startsWith('@') || filePath.startsWith('node_modules/') || filePath.includes('/node_modules/');
+
+    const destPath = isDependency
+      ? join(sandboxDir, filePath)  // Place dependencies at root level
+      : join(sandboxDir, 'src', filePath);  // Place user contracts in src/
+
+    createFileWithDirs(destPath, value.content);
+    console.log(`Placed file at: ${destPath}`);
+  }
+
   return sandboxDir;
 }
 
-function runSlitherOnFileContents(fileContentMap: FileContentMap, args: string[] = [], version: string | null = null): SlitherResult {
+function runSlitherOnFileContents(fileContentMap: FileContentMap, args: string[] = [], version: string | null = null, remappings?: string[]): SlitherResult {
   let sandboxDir: string | null = null;
 
   console.log(`Received request to analyze ${Object.keys(fileContentMap).length} files with Slither...`);
-  
+
   try {
     const fileEntries = Object.entries(fileContentMap);
     if (fileEntries.length === 0) {
       return { success: false, error: "No files provided for analysis" };
     }
 
-    // Create cache key from file paths and content hashes
+    // Create cache key from file paths, content hashes, and remappings
+    const remappingsKey = remappings ? remappings.sort().join('|') : '';
     const cacheKey = fileEntries
       .sort(([pathA], [pathB]) => pathA.localeCompare(pathB))
       .map(([path, value]) => `${path}:${Buffer.from(value.content).toString('base64').slice(0, 16)}`)
-      .join('|');
-    
+      .join('|') + (remappingsKey ? `::remappings:${remappingsKey}` : '');
+
     if (analysisCache.has(cacheKey)) {
       console.log(`Using cached analysis for ${fileEntries.length} files`);
       return { success: true, ...analysisCache.get(cacheKey) };
     }
 
-    sandboxDir = createSandboxedEnvironment(fileContentMap, version);
+    sandboxDir = createSandboxedEnvironment(fileContentMap, version, remappings);
     console.log(`Running Slither analysis on ${fileEntries.length} files in sandbox ${sandboxDir}...`);
     
     const slitherArgs = ["src", ...args];
@@ -123,10 +137,11 @@ function runSlitherOnFileContents(fileContentMap: FileContentMap, args: string[]
     let combinedOutput = '';
     
     try {
-      const result = execSync(cmd, { 
+      const result = execSync(cmd, {
         encoding: "utf8",
-        timeout: 30000,
-        cwd: sandboxDir
+        timeout: 120000, // Increased to 2 minutes for complex projects
+        cwd: sandboxDir,
+        maxBuffer: 10 * 1024 * 1024 // 10MB buffer for large outputs
       });
       stdout = result;
       combinedOutput = result;
@@ -135,7 +150,15 @@ function runSlitherOnFileContents(fileContentMap: FileContentMap, args: string[]
       stdout = err.stdout || '';
       stderr = err.stderr || '';
       combinedOutput = (stdout + stderr).trim();
-      
+
+      if (err.code === 'ETIMEDOUT') {
+        console.error(`Command timed out after 120 seconds`);
+        return {
+          success: false,
+          error: `Slither analysis timed out after 120 seconds. The project may be too complex or have dependency resolution issues.`
+        };
+      }
+
       console.log(`Command failed with code ${err.status}, but may have output:`);
       console.log(`Error message: ${err.message}`);
     }
@@ -186,6 +209,11 @@ function createMcpServer(): Server {
               type: "object",
               description: "Map of file paths to their content (e.g., {'Contract.sol': 'contract MyContract {...}'}). "
             },
+            remappings: {
+              type: "array",
+              items: { type: "string" },
+              description: "Array of import remappings (e.g., ['@openzeppelin/=lib/openzeppelin-contracts/']). Optional."
+            },
           },
           required: ["sources"],
         },
@@ -205,6 +233,11 @@ function createMcpServer(): Server {
               items: { type: "string" },
               description: "List of specific detector names to run (optional, runs all if not specified)",
             },
+            remappings: {
+              type: "array",
+              items: { type: "string" },
+              description: "Array of import remappings (e.g., ['@openzeppelin/=lib/openzeppelin-contracts/']). Optional."
+            },
           },
           required: ["sources"],
         },
@@ -223,6 +256,11 @@ function createMcpServer(): Server {
               type: "string",
               description: "Specific contract name (optional)",
             },
+            remappings: {
+              type: "array",
+              items: { type: "string" },
+              description: "Array of import remappings (e.g., ['@openzeppelin/=lib/openzeppelin-contracts/']). Optional."
+            },
           },
           required: ["sources"],
         },
@@ -234,8 +272,8 @@ function createMcpServer(): Server {
     const { name, arguments: args } = request.params;
 
     if (name === "analyze_files_with_slither") {
-      const { sources } = args as { sources: FileContentMap };
-      const result = runSlitherOnFileContents(sources);
+      const { sources, remappings } = args as { sources: FileContentMap; remappings?: string[] };
+      const result = runSlitherOnFileContents(sources, [], null, remappings);
       
       if (!result.success) {
         return {
@@ -258,9 +296,9 @@ function createMcpServer(): Server {
     }
 
     if (name === "run_detectors_with_slither") {
-      const { sources, detectors } = args as { sources: FileContentMap; detectors?: string[] };
+      const { sources, detectors, remappings } = args as { sources: FileContentMap; detectors?: string[]; remappings?: string[] };
       const detectorArgs = detectors ? ["--detect", detectors.join(",")] : [];
-      const result = runSlitherOnFileContents(sources, detectorArgs);
+      const result = runSlitherOnFileContents(sources, detectorArgs, null, remappings);
       
       if (!result.success) {
         return {
@@ -281,8 +319,8 @@ function createMcpServer(): Server {
     }
 
     if (name === "get_contract_info_with_slither") {
-      const { sources, contract_name } = args as { sources: FileContentMap; contract_name?: string };
-      const result = runSlitherOnFileContents(sources, ["--print", "inheritance-graph"]);
+      const { sources, contract_name, remappings } = args as { sources: FileContentMap; contract_name?: string; remappings?: string[] };
+      const result = runSlitherOnFileContents(sources, ["--print", "inheritance-graph"], null, remappings);
       
       if (!result.success) {
         return {
@@ -380,14 +418,14 @@ app.delete("/mcp", async (req: Request, res: Response) => {
 
 app.post("/analyze", async (req: Request, res: Response) => {
   try {
-    const { sources, version } = req.body as { sources: FileContentMap, version: string };
-    
+    const { sources, version, remappings } = req.body as { sources: FileContentMap; version: string; remappings?: string[] };
+
     if (!sources || typeof sources !== 'object') {
       res.status(400).json({ error: "Missing or invalid 'sources' parameter" });
       return;
     }
 
-    const result = runSlitherOnFileContents(sources, [], version);
+    const result = runSlitherOnFileContents(sources, [], version, remappings);
     
     if (!result.success) {
       res.status(500).json({ 
