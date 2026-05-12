@@ -113,7 +113,8 @@ function runSlitherOnFileContents(fileContentMap: FileContentMap, args: string[]
 
     sandboxDir = createSandboxedEnvironment(fileContentMap, version);
     console.log(`Running Slither analysis on ${fileEntries.length} files in sandbox ${sandboxDir}...`);
-    
+
+    args.push('--json results.json')
     const slitherArgs = ["src", ...args];
     const cmd = `slither ${slitherArgs.join(" ")}`
     console.log(`Executing command: ${cmd} in directory: ${sandboxDir}`);
@@ -140,11 +141,19 @@ function runSlitherOnFileContents(fileContentMap: FileContentMap, args: string[]
       console.log(`Error message: ${err.message}`);
     }
 
+    let jsonOutput
+    try {
+      outputPath = join(sandboxDir, 'results.json');
+      jsonOutput = readFileSync(outputPath, 'utf8');
+    } catch (e) {
+      console.warn('unable to get JSON output', e)
+    }
+
     const analysis = {
       contracts: [],
       detectors: [],
       functions: [],
-      analysisOutput: combinedOutput || "No output from Slither"
+      analysisOutput: jsonOutput || combinedOutput || "No output from Slither"
     };
 
     analysisCache.set(cacheKey, analysis);
