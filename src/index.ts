@@ -143,7 +143,7 @@ function runSlitherOnFileContents(fileContentMap: FileContentMap, args: string[]
 
     let jsonOutput
     try {
-      outputPath = join(sandboxDir, 'results.json');
+      const outputPath = join(sandboxDir, 'results.json');
       jsonOutput = readFileSync(outputPath, 'utf8');
     } catch (e) {
       console.warn('unable to get JSON output', e)
