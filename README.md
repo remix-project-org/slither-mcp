@@ -8,18 +8,20 @@ The server wraps Slither static analysis functionality, making it accessible thr
 
 ## Features
 
-- **Caching**: Slither runs are cached to `{$PROJECT_PATH}/artifacts/project_facts.json` for faster subsequent loads
-- **Security Analysis**: Run Slither detectors and access results with filtering  
+- **Caching**: Slither runs are cached for faster subsequent loads
+- **Security Analysis**: Run Slither detectors and access results with filtering
 - **Contract Analysis**: Get detailed information about contracts, functions, and inheritance
 - **Project Support**: Works with Foundry, Hardhat, and other Solidity project types
+- **Library Import Support**: Handles external dependencies (OpenZeppelin, etc.) with custom remappings
+- **Automatic File Placement**: Smart detection of dependency vs. user files for proper compilation
 
 ## Tools
 
-| Tool | Description |
-|------|-------------|
-| `analyze_files` | Run Slither static analysis on specific Solidity files |
-| `run_detectors` | Run specific Slither detectors on file list |
-| `get_contract_info` | Get detailed information about contracts in files |
+| Tool | Description | Parameters |
+|------|-------------|------------|
+| `analyze_files_with_slither` | Run Slither static analysis on Solidity files | `sources` (required), `remappings` (optional) |
+| `run_detectors_with_slither` | Run specific Slither detectors on files | `sources` (required), `detectors` (optional), `remappings` (optional) |
+| `get_contract_info_with_slither` | Get detailed information about contracts | `sources` (required), `contract_name` (optional), `remappings` (optional) |
 
 ## Requirements
 
@@ -70,4 +72,33 @@ This server integrates with the [eth-security-toolbox](https://github.com/trailo
 
 ## Usage
 
-All tools accept `files` objects containing file paths as keys and Solidity source code as values. Analysis runs in sandboxed environments with automatic cleanup. See [example-usage.md](example-usage.md) for detailed examples.
+### Basic Usage
+
+All tools accept `sources` objects containing file paths as keys and Solidity source code as values. Analysis runs in sandboxed Foundry environments with automatic cleanup.
+
+```json
+{
+  "sources": {
+    "contracts/MyToken.sol": "pragma solidity ^0.8.0; contract MyToken { ... }"
+  }
+}
+```
+
+### Using with External Libraries
+
+When analyzing contracts that import external libraries (like OpenZeppelin), provide both the sources and remappings:
+
+```json
+{
+  "sources": {
+    "contracts/MyToken.sol": "import '@openzeppelin/contracts/token/ERC721/ERC721.sol'; ...",
+    "@openzeppelin/contracts@5.6.0/token/ERC721/ERC721.sol": "...",
+    "@openzeppelin/contracts@5.6.0/access/Ownable.sol": "..."
+  },
+  "remappings": [
+    "@openzeppelin/contracts/=@openzeppelin/contracts@5.6.0/"
+  ]
+}
+```
+
+See [example-usage.md](example-usage.md) for detailed examples.
