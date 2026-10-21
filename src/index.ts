@@ -5,7 +5,7 @@ import express, { Request, Response } from "express";
 import { createHash, randomUUID } from "crypto";
 import { execSync } from "child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from "fs";
-import { join, dirname } from "path";
+import { join, dirname, isAbsolute, relative, resolve, sep } from "path";
 import { tmpdir } from "os";
 
 const PORT = parseInt(process.env.PORT || "9005");
@@ -29,6 +29,21 @@ interface FileContentMap {
 
 const analysisCache = new Map<string, any>();
 const MAX_CACHED_ANALYSES = 500;
+
+/**
+ * Checks that a client-supplied source path stays inside the sandbox's src folder:
+ * no absolute paths and no ".." segments that climb out of it.
+ */
+function assertSafeSourcePath(filePath: string): void {
+  if (typeof filePath !== "string" || filePath.length === 0 || filePath.includes("\0") || isAbsolute(filePath)) {
+    throw new Error(`Invalid source path: ${JSON.stringify(filePath)}`);
+  }
+  const root = resolve("/sandbox/src");
+  const rel = relative(root, resolve(root, filePath));
+  if (rel === "" || rel === ".." || rel.startsWith(".." + sep) || isAbsolute(rel)) {
+    throw new Error(`Invalid source path: ${JSON.stringify(filePath)}`);
+  }
+}
 
 function createFileWithDirs(filePath: string, content: string): void {
   const dir = dirname(filePath);
@@ -56,6 +71,9 @@ function setFoundrySolcVersion(version: string | null, sandboxDir: string) {
 }
 
 function createSandboxedEnvironment(fileContentMap: FileContentMap, version: string | null): string {
+  // Reject unsafe paths before anything is written
+  for (const filePath of Object.keys(fileContentMap)) assertSafeSourcePath(filePath);
+
   const sandboxDir = mkdtempSync(join(tmpdir(), "slither-sandbox-"));
   
   // Initialize as a foundry project
