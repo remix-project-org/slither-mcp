@@ -2,7 +2,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import express, { Request, Response } from "express";
-import { randomUUID } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import { execSync } from "child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from "fs";
 import { join, dirname } from "path";
@@ -28,6 +28,7 @@ interface FileContentMap {
 }
 
 const analysisCache = new Map<string, any>();
+const MAX_CACHED_ANALYSES = 500;
 
 function createFileWithDirs(filePath: string, content: string): void {
   const dir = dirname(filePath);
@@ -100,11 +101,16 @@ function runSlitherOnFileContents(fileContentMap: FileContentMap, args: string[]
       return { success: false, error: "No files provided for analysis" };
     }
 
-    // Create cache key from file paths and content hashes
-    const cacheKey = fileEntries
-      .sort(([pathA], [pathB]) => pathA.localeCompare(pathB))
-      .map(([path, value]) => `${path}:${Buffer.from(value.content).toString('base64').slice(0, 16)}`)
-      .join('|');
+    // Cache key: a hash of every file's full path and content, the compiler version and the Slither args
+    const cacheKey = createHash("sha256")
+      .update(JSON.stringify({
+        version,
+        args,
+        files: fileEntries
+          .sort(([pathA], [pathB]) => pathA.localeCompare(pathB))
+          .map(([path, value]) => [path, value.content])
+      }))
+      .digest("hex");
     
     if (analysisCache.has(cacheKey)) {
       console.log(`Using cached analysis for ${fileEntries.length} files`);
@@ -157,6 +163,10 @@ function runSlitherOnFileContents(fileContentMap: FileContentMap, args: string[]
     };
 
     analysisCache.set(cacheKey, analysis);
+    if (analysisCache.size > MAX_CACHED_ANALYSES) {
+      const oldest = analysisCache.keys().next().value;
+      if (oldest) analysisCache.delete(oldest);
+    }
     return { success: true, ...analysis };
     
   } catch (err) {
